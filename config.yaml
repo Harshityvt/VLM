@@ -1,0 +1,113 @@
+# Pipeline configuration. Secrets live in .env, not here.
+# Separate stack from ocr_pipeline_nemo_10_16_2026: every local service is on its own port (81xx, 19531).
+
+paths:
+  pdfs: data/pdfs          # put the 1,000 PDFs here (subfolders are scanned)
+  pages: data/pages        # rendered page JPEGs, kept for citations
+  manifest: state/manifest.db
+  logs: logs
+
+render:
+  dpi: 150
+  jpeg_quality: 90
+
+# ---------------- Extraction NIMs ----------------
+nims:
+  page_elements:
+    url: http://127.0.0.1:8100
+    model: nvidia/nemotron-page-elements-v3
+    concurrency: 4
+  table_structure:
+    url: http://127.0.0.1:8101
+    model: nvidia/nemotron-table-structure-v1
+    concurrency: 4
+  graphic_elements:            # hosted only (no self-hosted image in NeMo Retriever 26.08)
+    url: https://ai.api.nvidia.com/v1/cv/nvidia/nemotron-graphic-elements-v1
+    model: nvidia/nemotron-graphic-elements-v1
+    concurrency: 2
+    max_b64_chars: 180000
+  # ---- OCR box: two open VLMs instead of NeMo Retriever OCR ----
+  deepseek_ocr:                # self-hosted on vLLM (docker compose service deepseek-ocr)
+    url: http://127.0.0.1:8102
+    health: /health            # vLLM's health route (the NIMs use /v1/health/ready)
+    model: deepseek-ai/DeepSeek-OCR
+    concurrency: 4             # matches --max-num-seqs in docker-compose.yml
+    max_tokens: 4096
+    min_side: 1024             # crops smaller than this (longest side, px) are upscaled first
+  glm:                         # GLM-4.6V, hosted (OpenAI-compatible chat completions)
+    # OpenRouter: the full 106B model, $0.30 in / $0.90 out per M tokens (about $0.001 per crop).
+    # Z.ai instead (glm-4.6v-flash, 9B, free): url https://api.z.ai/api/paas/v4, api_key_env ZAI_API_KEY,
+    # model glm-4.6v-flash, extra_body {thinking: {type: disabled}}.
+    url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    model: z-ai/glm-4.6v
+    concurrency: 4             # 16 is faster, but needs OpenRouter credit: each in-flight call reserves its max cost (HTTP 402 at $0)
+    temperature: 0.1
+    max_tokens: 4096
+    min_side: 1024
+    extra_body:
+      reasoning: {enabled: false}  # transcription doesn't need reasoning tokens; faster and cheaper
+  parse:
+    url: http://127.0.0.1:8103
+    model: nvidia/nemotron-parse-v1.2     # self-hosted name ("nvidia/nemotron-parse" is the hosted one)
+    concurrency: 4
+  embed:
+    url: http://127.0.0.1:8104
+    model: nvidia/llama-nemotron-embed-vl-1b-v2
+    batch_size: 32
+  rerank:
+    url: http://127.0.0.1:8105
+    model: nvidia/llama-nemotron-rerank-vl-1b-v2
+
+# ---------------- Hosted LLM ----------------
+llm:
+  base_url: https://integrate.api.nvidia.com/v1
+# Hosted models come and go: 49B v1.5 was retired 2026-08-26 and 3 Super 120B stopped serving ~2026-10-20.
+  model: nvidia/nemotron-3-ultra-550b-a55b          # "LLM" box: writes the answer
+  judge_model: nvidia/nemotron-3-ultra-550b-a55b    # "LLM (optional)" box: Reflection judge (needs a strong model)
+  fast_model: nvidia/nemotron-3.5-lightning-30b-a3b # Query Processing + Guardrails yes/no checks
+  # Tried in order when a model above returns 404/410 (no longer served).
+  fallback_models:
+    - nvidia/nemotron-3-ultra-550b-a55b
+    - nvidia/nemotron-3.5-lightning-30b-a3b
+    - nvidia/nemotron-3-super-120b-a12b
+  temperature: 0.2
+  max_tokens: 1024
+
+# ---------------- OCR box routing ----------------
+ocr:
+  routes:                  # primary reader per region; the other model is the fallback
+    table: deepseek        # dense grids, exact numbers and part numbers
+    chart: glm             # axes, legend, values and what the chart means
+    infographic: glm       # diagrams with callouts, flows
+  table_check: true        # compare each table with Table Structure's grid ...
+  table_mismatch: 1.0      # ... and re-read with the other model above this score (0 = same shape)
+
+# ---------------- Chunking ----------------
+chunking:
+  max_chars: 2000        # ~512 tokens
+  overlap_chars: 250     # ~64 tokens
+
+# ---------------- Vector DB ----------------
+milvus:
+  uri: http://127.0.0.1:19531
+  collection: pdf_rag
+  dim: 2048              # verified against the embed NIM in the smoke test
+  index:
+    type: GPU_CAGRA
+    metric: IP
+    params: {intermediate_graph_degree: 64, graph_degree: 32}
+  search_params: {itopk_size: 128, search_width: 4}
+
+# ---------------- Retrieval ----------------
+retrieval:
+  guardrails: true        # NeMo Guardrails input + output rails
+  multi_query: 3          # paraphrases from Query Processing
+  top_k: 50               # vector DB hits sent to the reranker
+  rerank_top_n: 5         # chunks sent to the LLM
+  reflection: true
+  max_retries: 2          # Reflection -> Query Processing loops
+
+ingest:
+  pdf_concurrency: 2      # PDFs processed at once
+  page_concurrency: 16    # pages per PDF processed at once

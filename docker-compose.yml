@@ -1,0 +1,213 @@
+# Open-VLM RAG stack: NeMo Retriever architecture with the OCR NIM replaced by DeepSeek-OCR (vLLM, here)
+# and GLM-4.6V (hosted, see config.yaml). 5 NIMs + DeepSeek-OCR + Milvus GPU (cuVS CAGRA), all on GPU 0.
+#
+# Fully separate from ocr_pipeline_nemo_10_16_2026: own project name, container names, ports (81xx, 19531)
+# and volumes. Both stacks don't fit on the 32 GB card at once: stop that one before starting this one.
+#   docker compose up -d deepseek-ocr      # one service, for a smoke test
+#   docker compose up -d                   # everything
+# Ports are bound to 127.0.0.1 only.
+
+name: open_source_vlm
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["0"]
+            capabilities: ["gpu"]
+
+x-nim: &nim
+  <<: *gpu
+  restart: unless-stopped
+  shm_size: 16gb
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://localhost:8000/v1/health/ready"]
+    interval: 15s
+    timeout: 10s
+    retries: 40
+    start_period: 120s
+
+# Settings from NVIDIA's NeMo Retriever compose/Helm files for the object-detection NIMs.
+x-nim-env: &nim-env
+  NGC_API_KEY: ${NGC_API_KEY}
+  NIM_ENGINE_MODEL_DOWNLOAD_PROVIDER: ngc
+  NIM_SERVER_BIND_ADDR: 0.0.0.0:8000
+  NIM_SERVER_MODE: latency
+  NIM_SERVER_MAX_WAIT_MS: "0"
+  NIM_ENGINE_COUNT: "1"
+  NIM_PIPELINE_MAX_BATCH_SIZE: "1"
+
+services:
+  # ---------- Extraction ----------
+  page-elements:
+    <<: *nim
+    image: nvcr.io/nim/nvidia/nemotron-object-detection:2.0.1
+    container_name: vlm-page-elements
+    environment:
+      <<: *nim-env
+      NIM_ENGINE_MODEL_NAME: nvidia/nemotron-page-elements-v3
+      NIM_ENGINE_MODEL_PATH: /model/page-elements
+    volumes:
+      - nim-cache:/opt/cache
+      - nim-weights:/model
+    ports: ["127.0.0.1:8100:8000"]
+
+  table-structure:
+    <<: *nim
+    image: nvcr.io/nim/nvidia/nemotron-object-detection:2.0.1
+    container_name: vlm-table-structure
+    environment:
+      <<: *nim-env
+      NIM_ENGINE_MODEL_NAME: nvidia/nemotron-table-structure-v1
+      NIM_ENGINE_MODEL_PATH: /model/table-structure
+    volumes:
+      - nim-cache:/opt/cache
+      - nim-weights:/model
+    ports: ["127.0.0.1:8101:8000"]
+
+  # OCR box, part 1: DeepSeek-OCR on vLLM (OpenAI-compatible). Part 2, GLM-4.6V, is a hosted API.
+  deepseek-ocr:
+    <<: *gpu
+    image: vllm/vllm-openai:v0.31.0
+    container_name: vlm-deepseek-ocr
+    restart: unless-stopped
+    shm_size: 8gb
+    entrypoint: ["vllm", "serve"]
+    command:
+      - deepseek-ai/DeepSeek-OCR
+      - --port=8000
+      # Repetition guard from DeepSeek's vLLM recipe; request-side settings are in deepseek_ocr.py.
+      - --logits-processors=vllm.model_executor.models.deepseek_ocr:NGramPerReqLogitsProcessor
+      - --no-enable-prefix-caching
+      - --mm-processor-cache-gb=0
+      # Fixed KV cache instead of --gpu-memory-utilization: under WSL vLLM's startup profile counts memory the
+      # other containers allocate meanwhile as its own and ends up with negative KV space. 1 GiB at 60 KiB/token
+      # (12 layers x 1280 x K+V x bf16) = ~17k tokens; with 6.2 GiB of weights the service uses ~8 GiB.
+      - --kv-cache-memory-bytes=1073741824
+      - --max-model-len=8192
+      - --max-num-seqs=4
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      # vLLM 0.31 defaults to Model Runner V2, which rejects DeepSeek's NGramPerReqLogitsProcessor
+      # (written for the V1 logits-processor interface). Use V1.
+      VLLM_USE_V2_MODEL_RUNNER: "0"
+      # vLLM 0.31's DeepEncoder attention kernel reads a module-level LOG2E that this Triton refuses to
+      # compile ("Cannot access global variable LOG2E from within @jit'ed function"). Triton's own escape hatch:
+      TRITON_ALLOW_NON_CONSTEXPR_GLOBALS: "1"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    ports: ["127.0.0.1:8102:8000"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 300s   # first start downloads ~6.7 GB of weights from Hugging Face
+
+  parse:
+    <<: *nim
+    image: nvcr.io/nim/nvidia/nemotron-parse-v1.2:1.7.0-variant
+    container_name: vlm-parse
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY}
+      NIM_HTTP_API_PORT: "8000"
+      # Docker Desktop runs on WSL2, where vLLM forces 'spawn' worker processes. NVIDIA's loader only adds
+      # Parse's custom model code to sys.path temporarily, so spawned workers can't import it. Make it permanent.
+      PYTHONPATH: /opt/nim/model_specific_modules
+      # Under WSL vLLM sees almost the whole card as free and reserved ~26 GiB of KV cache. Cap it at
+      # 6 x max_model_len (9,000) = 54k tokens (~4.4 GiB): six pages in flight, room left for the other services.
+      NIM_NUM_KV_CACHE_SEQ_LENS: "6"
+      NIM_RELAX_MEM_CONSTRAINTS: "1"   # required, or the KV cap above is ignored
+    volumes:
+      - nim-cache-parse:/opt/nim/.cache
+    ports: ["127.0.0.1:8103:8000"]
+
+  # ---------- Embedding / reranking ----------
+  embed:
+    <<: *nim
+    image: nvcr.io/nim/nvidia/llama-nemotron-embed-vl-1b-v2:2.3.0
+    container_name: vlm-embed
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY}
+      NIM_HTTP_API_PORT: "8000"
+      OMP_NUM_THREADS: "1"
+    volumes:
+      - nim-cache-embed:/opt/nim/.cache
+    ports: ["127.0.0.1:8104:8000"]
+
+  rerank:
+    <<: *nim
+    image: nvcr.io/nim/nvidia/llama-nemotron-rerank-vl-1b-v2:2.3.0
+    container_name: vlm-rerank
+    environment:
+      NGC_API_KEY: ${NGC_API_KEY}
+      NIM_HTTP_API_PORT: "8000"
+    volumes:
+      - nim-cache-rerank:/opt/nim/.cache
+    ports: ["127.0.0.1:8105:8000"]
+
+  # ---------- Vector database: Milvus GPU (CAGRA index from cuVS) ----------
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.25
+    container_name: vlm-milvus-etcd
+    restart: unless-stopped
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - milvus-etcd:/etcd
+    command: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio:
+    image: milvusdb/minio:RELEASE.2024-12-18T13-15-44Z
+    container_name: vlm-milvus-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    volumes:
+      - milvus-minio:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  milvus:
+    <<: *gpu
+    image: milvusdb/milvus:v2.6.24-gpu
+    container_name: vlm-milvus-standalone
+    restart: unless-stopped
+    command: ["milvus", "run", "standalone"]
+    security_opt: ["seccomp:unconfined"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MQ_TYPE: woodpecker
+    volumes:
+      - milvus-data:/var/lib/milvus
+    ports:
+      - "127.0.0.1:19531:19530"
+      - "127.0.0.1:9191:9091"
+    depends_on: [etcd, minio]
+
+volumes:
+  nim-cache:
+  nim-weights:
+  nim-cache-parse:
+  nim-cache-embed:
+  nim-cache-rerank:
+  hf-cache:
+  milvus-etcd:
+  milvus-minio:
+  milvus-data:

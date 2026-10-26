@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual Assistant</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: two panes, conversation on the left, an inspector (sources / page / pipeline) on the right; stacks on narrow screens. */
+:root {
+  --bg: #f4f7f7; --surface: #ffffff; --sunken: #eef2f2; --fg: #172123; --muted: #5a6a6e; --rule: #d7e0e1;
+  --accent: #0f7c74; --accent-bg: #e3f3f1; --accent-fg: #ffffff;
+  --hosted: #a6620a; --hosted-bg: #fbf0df;
+  --good: #1d7a3c; --good-bg: #e5f4e9; --warn: #9a5b00; --warn-bg: #fdf1dc; --bad: #b3261e; --bad-bg: #fbe7e5;
+  --mark: rgba(15,124,116,.16); --mark-line: #0f7c74;
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1617; --surface: #172123; --sunken: #1d2a2c; --fg: #e3ebec; --muted: #9aabae; --rule: #2a3a3d;
+    --accent: #4cc7b9; --accent-bg: #12302d; --accent-fg: #0f1617;
+    --hosted: #e8a54a; --hosted-bg: #33260f;
+    --good: #6fd38f; --good-bg: #15301e; --warn: #f0b75a; --warn-bg: #33270f; --bad: #ff8a80; --bad-bg: #3a1a18;
+    --mark: rgba(76,199,185,.18); --mark-line: #4cc7b9;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 15px/1.55 var(--font-body); display: flex; flex-direction: column; }
+button, textarea, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- top bar ---------- */
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; padding: 12px 20px; border-bottom: 1px solid var(--rule); background: var(--surface); }
+.brand h1 { font: 700 18px/1.2 var(--font-display); margin: 0; letter-spacing: -0.01em; }
+.brand p { margin: 2px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.services { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.svc { display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px var(--font-mono); padding: 4px 8px; border-radius: 999px; border: 1px solid var(--rule); background: var(--sunken); color: var(--muted); }
+.svc i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.svc.ok i { background: var(--good); } .svc.down { color: var(--bad); border-color: var(--bad); background: var(--bad-bg); } .svc.down i { background: var(--bad); }
+.svc.hosted { border-style: dashed; border-color: var(--hosted); color: var(--hosted); background: var(--hosted-bg); } .svc.hosted i { background: var(--hosted); }
+
+/* ---------- layout ---------- */
+.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); }
+.chat { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--rule); }
+.thread { flex: 1; overflow-y: auto; padding: 24px clamp(16px, 4vw, 40px); display: flex; flex-direction: column; gap: 18px; }
+.inspector { display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
+@media (max-width: 900px) {
+  body { height: auto; }
+  .layout { grid-template-columns: 1fr; }
+  .chat { border-right: 0; border-bottom: 1px solid var(--rule); min-height: 70vh; }
+  .inspector { min-height: 60vh; }
+}
+
+/* ---------- empty state ---------- */
+.empty { margin: auto 0; max-width: 620px; display: flex; flex-direction: column; gap: 14px; }
+.empty h2 { font: 600 22px/1.25 var(--font-display); margin: 0; text-wrap: balance; }
+.empty p { margin: 0; color: var(--muted); max-width: 60ch; }
+.examples { display: grid; gap: 8px; }
+.examples button { text-align: left; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--rule); background: var(--surface); }
+.examples button:hover { border-color: var(--accent); background: var(--accent-bg); }
+.label { font: 500 11px var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+
+/* ---------- messages ---------- */
+.msg { display: flex; flex-direction: column; gap: 6px; max-width: 760px; }
+.msg.user { align-self: flex-end; align-items: flex-end; }
+.msg.user .bubble { background: var(--accent); color: var(--accent-fg); border-radius: 14px 14px 4px 14px; padding: 9px 14px; max-width: 60ch; white-space: pre-wrap; }
+.msg.bot .bubble { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px 14px 14px 14px; padding: 12px 16px; }
+.msg.bot.selected .bubble { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.bubble p { margin: 0 0 8px; } .bubble p:last-child { margin: 0; }
+.cite { display: inline-flex; align-items: center; gap: 3px; font: 500 12px var(--font-mono); padding: 1px 7px; margin: 0 2px; border-radius: 5px; border: 1px solid var(--accent); background: var(--accent-bg); color: var(--accent); vertical-align: 1px; }
+.cite:hover { background: var(--accent); color: var(--accent-fg); }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12.5px; color: var(--muted); }
+.chip { display: inline-flex; align-items: center; gap: 5px; font: 500 11.5px var(--font-mono); padding: 2px 8px; border-radius: 999px; }
+.chip.good { background: var(--good-bg); color: var(--good); } .chip.warn { background: var(--warn-bg); color: var(--warn); } .chip.bad { background: var(--bad-bg); color: var(--bad); } .chip.plain { background: var(--sunken); color: var(--muted); }
+.linkish { border: 0; background: none; padding: 0; color: var(--accent); font-size: 12.5px; text-decoration: underline; text-underline-offset: 2px; }
+.working { display: flex; flex-direction: column; gap: 8px; }
+.stages { display: flex; flex-wrap: wrap; gap: 6px; }
+.stage { font: 500 11.5px var(--font-mono); padding: 3px 8px; border-radius: 5px; background: var(--sunken); color: var(--muted); }
+.stage.on { background: var(--accent-bg); color: var(--accent); }
+@media (prefers-reduced-motion: no-preference) { .stage.on { animation: pulse 1.2s ease-in-out infinite; } }
+@keyframes pulse { 50% { opacity: .55; } }
+.error { color: var(--bad); }
+
+/* ---------- composer ---------- */
+.composer { border-top: 1px solid var(--rule); background: var(--surface); padding: 12px clamp(16px, 4vw, 40px) 14px; display: flex; flex-direction: column; gap: 8px; }
+.inputrow { display: flex; gap: 10px; align-items: flex-end; }
+.inputrow textarea { flex: 1; min-width: 0; resize: none; min-height: 46px; max-height: 180px; padding: 11px 14px; border-radius: 10px; border: 1px solid var(--rule); background: var(--bg); line-height: 1.4; }
+.inputrow textarea:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px var(--accent-bg); }
+.primary { height: 46px; padding: 0 20px; border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-fg); font-weight: 600; }
+.primary:disabled { opacity: .5; cursor: progress; }
+.opts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; font-size: 13px; color: var(--muted); }
+.opts label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.opts input { accent-color: var(--accent); }
+.opts .spacer { flex: 1; }
+.ghost { border: 1px solid var(--rule); background: none; border-radius: 7px; padding: 4px 10px; font-size: 13px; color: var(--muted); }
+.ghost:hover { color: var(--fg); border-color: var(--muted); }
+
+/* ---------- inspector ---------- */
+.tabs { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--rule); }
+.tabs button { border: 0; background: none; padding: 12px 12px 10px; font: 600 13.5px var(--font-display); color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+.tabs .count { font: 500 11px var(--font-mono); margin-left: 4px; color: var(--muted); }
+.panel { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 20px 24px; }
+.placeholder { color: var(--muted); max-width: 46ch; margin-top: 8px; }
+
+.src { width: 100%; text-align: left; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 4px 10px; padding: 12px; border-radius: 9px; border: 1px solid var(--rule); background: var(--surface); margin-bottom: 10px; }
+.src:hover { border-color: var(--muted); }
+.src.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.rank { font: 600 13px var(--font-mono); color: var(--muted); padding-top: 1px; }
+.srchead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.srchead strong { font: 600 14px var(--font-display); }
+.type { font: 500 11px var(--font-mono); padding: 1px 7px; border-radius: 4px; background: var(--sunken); color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.type.table { background: var(--accent-bg); color: var(--accent); } .type.chart, .type.infographic { background: var(--hosted-bg); color: var(--hosted); }
+.score { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font: 500 11.5px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.score b { display: inline-block; width: 46px; height: 5px; border-radius: 3px; background: var(--sunken); position: relative; overflow: hidden; }
+.score b::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w); background: var(--accent); border-radius: 3px; }
+.ctx { grid-column: 2; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snippet { grid-column: 2; font-size: 13.5px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9.5em; overflow: hidden; position: relative; }
+.snippet.open { max-height: none; }
+.dupes { grid-column: 2; font-size: 12px; color: var(--muted); }
+.tablewrap { grid-column: 2; overflow-x: auto; max-height: 15em; overflow-y: hidden; }
+.tablewrap.open { max-height: none; }
+.md { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.md td { border: 1px solid var(--rule); padding: 3px 7px; vertical-align: top; }
+.md tr:first-child td { background: var(--sunken); font-weight: 600; }
+
+.pagebar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.pagebar strong { font: 600 14px var(--font-display); margin-right: auto; }
+.pageframe { position: relative; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; background: #fff; }
+.pageframe img { display: block; width: 100%; height: auto; }
+.bbox { position: absolute; border: 2px solid var(--mark-line); background: var(--mark); border-radius: 3px; pointer-events: none; }
+.caption { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+
+.steps { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-direction: column; }
+.steps li { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); align-items: start; }
+.steps .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; background: var(--muted); }
+.steps .dot.good { background: var(--good); } .steps .dot.bad { background: var(--bad); } .steps .dot.off { background: transparent; border: 1.5px solid var(--muted); }
+.steps .name { font-weight: 600; } .steps .detail { font-size: 13px; color: var(--muted); }
+.steps .t { font: 500 12px var(--font-mono); color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.qlist { margin: 4px 0 0; padding-left: 18px; font-size: 13px; color: var(--fg); }
+.bars { display: grid; grid-template-columns: max-content minmax(0, 1fr) 52px; gap: 6px 10px; align-items: center; font-size: 12.5px; }
+.bars .bar { height: 10px; border-radius: 3px; background: var(--accent); min-width: 2px; }
+.bars .bar.hosted { background: var(--hosted); }
+.bars .v { font: 500 12px var(--font-mono); text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+h3 { font: 600 13px var(--font-mono); text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <h1>Manual Assistant</h1>
+    <p id="indexInfo">NeMo Retriever RAG · loading index…</p>
+  </div>
+  <div class="services" id="services" aria-label="Service status"></div>
+</header>
+
+<main class="layout">
+  <section class="chat" aria-label="Conversation">
+    <div class="thread" id="thread">
+      <div class="empty" id="empty">
+        <span class="label">Ask the O&amp;M manual</span>
+        <h2>Questions are answered only from your PDFs, with page citations you can open.</h2>
+        <p>Each answer goes through input guardrails, query rewriting, vector search, reranking, the LLM, a Reflection check and output guardrails, the same steps as the architecture diagram.</p>
+        <div class="examples" id="examples">
+          <span class="label">Try one of these</span>
+          <button type="button">What is the part number for the 24 V horizontal hall lantern assembly with box, terminal up?</button>
+          <button type="button">Are the cabinet doors field reversible, and what do I need before re-hinging them?</button>
+          <button type="button">What is the width, content and country of origin of the Himalayan fabric?</button>
+          <button type="button">How many double rubs is the Tilt upholstery rated for, and can it be used outdoors?</button>
+        </div>
+      </div>
+    </div>
+    <form class="composer" id="composer">
+      <div class="inputrow">
+        <textarea id="q" rows="1" placeholder="Ask about the manual…" aria-label="Question"></textarea>
+        <button class="primary" id="send" type="submit">Ask</button>
+      </div>
+      <div class="opts">
+        <label><input type="checkbox" id="optGuard" checked> Guardrails</label>
+        <label><input type="checkbox" id="optReflect" checked> Reflection check</label>
+        <span class="spacer"></span>
+        <span>Enter to send · Shift+Enter for a new line</span>
+        <button type="button" class="ghost" id="newChat">New chat</button>
+      </div>
+    </form>
+  </section>
+
+  <aside class="inspector" aria-label="Answer details">
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-sources" aria-selected="true" aria-controls="panel-sources">Sources<span class="count" id="srcCount"></span></button>
+      <button role="tab" id="tab-page" aria-selected="false" aria-controls="panel-page">Page</button>
+      <button role="tab" id="tab-pipeline" aria-selected="false" aria-controls="panel-pipeline">Pipeline</button>
+    </div>
+    <div class="panel" id="panel-sources" role="tabpanel"><p class="placeholder">The passages used for an answer appear here, ranked by the reranker. Click one to see it on its page.</p></div>
+    <div class="panel" id="panel-page" role="tabpanel" hidden><p class="placeholder">Click a citation or a source to open the manual page, with the table or chart outlined.</p></div>
+    <div class="panel" id="panel-pipeline" role="tabpanel" hidden><p class="placeholder">Each step the question went through appears here, with timings, rewritten queries and the Reflection verdict.</p></div>
+  </aside>
+</main>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const state = { history: [], results: [], current: null, page: null, busy: false };
+
+/* ---------- status bar ---------- */
+async function loadStatus() {
+  try {
+    const s = await (await fetch("/api/status")).json();
+    state.llmModel = (s.services.find(v => v.name === "LLM") || {}).model;
+    $("#services").innerHTML = s.services.map(v => {
+      const cls = v.where === "hosted" ? "hosted" : v.ok ? "ok" : "down";
+      const tip = v.where === "hosted" ? `${v.name}: NVIDIA-hosted${v.model ? " · " + v.model : ""}` : `${v.name}: ${v.ok ? "ready" : "not responding"}`;
+      return `<span class="svc ${cls}" title="${esc(tip)}"><i></i>${esc(v.name)}</span>`;
+    }).join("");
+    $("#indexInfo").textContent = `NeMo Retriever RAG · ${s.documents.toLocaleString()} PDF${s.documents === 1 ? "" : "s"} · ${s.pages.toLocaleString()} pages · ${s.chunks.toLocaleString()} chunks indexed`;
+  } catch {
+    $("#services").innerHTML = `<span class="svc down"><i></i>UI server not reachable</span>`;
+  }
+}
+
+/* ---------- tabs ---------- */
+function showTab(name) {
+  for (const t of ["sources", "page", "pipeline"]) {
+    $(`#tab-${t}`).setAttribute("aria-selected", String(t === name));
+    $(`#panel-${t}`).hidden = t !== name;
+  }
+}
+for (const t of ["sources", "page", "pipeline"]) $(`#tab-${t}`).addEventListener("click", () => showTab(t));
+
+/* ---------- answer rendering ---------- */
+const CITE = /\[([^\[\]]+?\.pdf)\s+p\.\s?(\d+)\]/gi;
+function renderAnswer(text, idx) {
+  const html = esc(text)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(CITE, (_, f, p) => `<button type="button" class="cite" data-r="${idx}" data-file="${f}" data-page="${p}" title="Open ${f} page ${p}">p.${p}</button>`);
+  return html.split(/\n{2,}/).map(par => `<p>${par.replace(/\n/g, "<br>")}</p>`).join("");
+}
+
+function statusChips(r) {
+  const chips = [];
+  if (r.blocked) chips.push(`<span class="chip bad">Blocked by ${r.blocked} guardrail</span>`);
+  else if (!r.reflection) chips.push(`<span class="chip plain">Reflection off</span>`);
+  else if (r.verified) chips.push(`<span class="chip good">✓ Verified by Reflection${r.reviews.length > 1 ? ` (after ${r.reviews.length - 1} retr${r.reviews.length > 2 ? "ies" : "y"})` : ""}</span>`);
+  else chips.push(`<span class="chip warn">Not verified after ${r.reviews.length} attempts</span>`);
+  chips.push(`<span>${r.total_seconds.toFixed(1)} s</span>`);
+  if (r.sources.length) chips.push(`<button type="button" class="linkish" data-show="${state.results.indexOf(r)}">${r.sources.length} sources</button>`);
+  return chips.join("");
+}
+
+function addMsg(role, html) {
+  $("#empty")?.remove();
+  const el = document.createElement("div");
+  el.className = `msg ${role}`;
+  el.innerHTML = html;
+  $("#thread").appendChild(el);
+  el.scrollIntoView({ block: "end", behavior: "smooth" });
+  return el;
+}
+
+/* ---------- inspector: sources ---------- */
+function mdTable(text) {
+  const lines = text.split("\n");
+  const rows = lines.filter(l => l.trim().startsWith("|") && !/^\|\s*-{3}/.test(l.trim()));
+  if (rows.length < 2) return null;
+  const cells = l => l.trim().replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map(c => esc(c.trim().replace(/\\\|/g, "|")));
+  const rest = lines.filter(l => !l.trim().startsWith("|")).join("\n").trim();
+  return `${rest ? `<div class="snippet">${esc(rest)}</div>` : ""}<div class="tablewrap"><table class="md">${rows.map(r => `<tr>${cells(r).map(c => `<td>${c}</td>`).join("")}</tr>`).join("")}</table></div>`;
+}
+
+function renderSources(r) {
+  $("#srcCount").textContent = r.sources.length ? `(${r.sources.length})` : "";
+  if (!r.sources.length) { $("#panel-sources").innerHTML = `<p class="placeholder">No passages were retrieved for this message.</p>`; return; }
+  const scores = r.sources.map(s => s.rerank_score), lo = Math.min(...scores, -8), hi = Math.max(...scores, 4);
+  $("#panel-sources").innerHTML = r.sources.map((s, i) => {
+    const w = Math.round(100 * (s.rerank_score - lo) / (hi - lo || 1));
+    const body = (s.element_type === "table" && mdTable(s.text)) || `<div class="snippet">${esc(s.text)}</div>`;
+    const dupes = s.also_on_pages.length ? `<div class="dupes">Same text also on ${s.also_on_pages.length} more page${s.also_on_pages.length === 1 ? "" : "s"}: ${s.also_on_pages.slice(0, 8).join(", ")}${s.also_on_pages.length > 8 ? "…" : ""}</div>` : "";
+    return `<button type="button" class="src" data-i="${i}">
+      <span class="rank">${i + 1}</span>
+      <span class="srchead"><strong>${esc(s.file_name)} · p.${s.page}</strong><span class="type ${s.element_type}"${s.extractor ? ` title="Read by ${esc(s.extractor)}"` : ""}>${s.element_type}</span>
+        <span class="score" title="Rerank score ${s.rerank_score}">${s.rerank_score.toFixed(2)}<b style="--w:${w}%"></b></span></span>
+      ${s.header ? `<span class="ctx" title="${esc(s.header)}">${esc(s.header)}</span>` : ""}
+      ${body}${dupes}
+    </button>`;
+  }).join("");
+  $("#panel-sources").querySelectorAll(".src").forEach(b => b.addEventListener("click", () => openPage(r, r.sources[+b.dataset.i])));
+}
+
+/* ---------- inspector: page ---------- */
+function pageUrl(docId, n) { return `/pages/${docId}/p${String(n).padStart(5, "0")}.jpg`; }
+
+function openPage(r, src, fileName, pageNo) {
+  const s = src || r.sources.find(x => x.page === pageNo && x.file_name === fileName);
+  const any = s || r.sources.find(x => x.file_name === fileName) || r.sources[0];
+  if (!any) return;
+  state.page = { docId: any.doc_id, file: any.file_name, page: s ? s.page : pageNo, src: s, r };
+  $("#panel-sources").querySelectorAll(".src").forEach(b => b.classList.toggle("active", s && r.sources[+b.dataset.i] === s));
+  drawPage();
+  showTab("page");
+}
+
+function drawPage() {
+  const p = state.page;
+  const box = p.src && p.src.page === p.page && p.src.bbox && p.src.bbox.length === 4 ? p.src.bbox : null;
+  const cap = p.src && p.src.page === p.page
+    ? (box ? `Outlined: the ${p.src.element_type} region used as source.` : `Source text comes from this page (${p.src.element_type}, read by Parse).`)
+    : "Page from the manual.";
+  $("#panel-page").innerHTML = `
+    <div class="pagebar">
+      <strong>${esc(p.file)} · page ${p.page.toLocaleString()}</strong>
+      <button type="button" class="ghost" id="prevPg" ${p.page <= 1 ? "disabled" : ""}>← Prev</button>
+      <button type="button" class="ghost" id="nextPg">Next →</button>
+    </div>
+    <div class="pageframe">
+      <img id="pgImg" src="${pageUrl(p.docId, p.page)}" alt="Page ${p.page} of ${esc(p.file)}">
+      ${box ? `<div class="bbox" style="left:${box[0] * 100}%;top:${box[1] * 100}%;width:${(box[2] - box[0]) * 100}%;height:${(box[3] - box[1]) * 100}%"></div>` : ""}
+    </div>
+    <p class="caption" id="pgCap">${cap}</p>`;
+  $("#pgImg").addEventListener("error", () => { $("#pgCap").textContent = "This page image isn't available (the page may not have been ingested yet)."; });
+  $("#prevPg").addEventListener("click", () => { p.page--; drawPage(); });
+  $("#nextPg").addEventListener("click", () => { p.page++; drawPage(); });
+  if (box) $("#pgImg").addEventListener("load", () => $(".bbox")?.scrollIntoView({ block: "center", behavior: "smooth" }), { once: true });
+}
+
+/* ---------- inspector: pipeline ---------- */
+function renderPipeline(r) {
+  const t = r.timings, f = k => (t[k] != null ? `${t[k].toFixed(2)} s` : "");
+  const step = (dot, name, detail, time) => `<li><span class="dot ${dot}"></span><div><div class="name">${name}</div>${detail ? `<div class="detail">${detail}</div>` : ""}</div><span class="t">${time}</span></li>`;
+  const steps = [];
+  steps.push(r.guardrails
+    ? step(r.blocked === "input" ? "bad" : "good", "NeMo Guardrails · input", r.blocked === "input" ? "Blocked the question." : "Question allowed.", f("guardrails_in"))
+    : step("off", "NeMo Guardrails · input", "Switched off for this question.", ""));
+  if (r.blocked !== "input") {
+    steps.push(step("good", "Query Processing", `Rewrote the question into ${r.queries.length} search quer${r.queries.length === 1 ? "y" : "ies"}:<ol class="qlist">${r.queries.map(q => `<li>${esc(q)}</li>`).join("")}</ol>`, f("query_processing")));
+    steps.push(step("good", "Embedding → Vector DB → Reranking", `Searched Milvus (GPU_CAGRA) with every query, merged and de-duplicated the hits, kept the top ${r.sources.length} after reranking.`, f("retrieve_rerank")));
+    steps.push(step("good", "LLM", `${esc(state.llmModel || "The hosted LLM")} wrote a cited draft from those passages.`, f("llm")));
+    if (r.reflection) {
+      r.reviews.forEach((v, i) => steps.push(step(v.passed ? "good" : "bad", `Reflection · attempt ${i + 1}`,
+        v.passed ? "Grounded in the passages and answers the question." : `Rejected: ${esc(v.feedback || "not supported by the passages")}${i < r.reviews.length - 1 ? " Sent back to Query Processing." : ""}`, "")));
+      if (t.reflection != null) steps[steps.length - 1] = steps[steps.length - 1].replace('<span class="t"></span>', `<span class="t">${f("reflection")} total</span>`);
+    } else steps.push(step("off", "Reflection", "Switched off for this question.", ""));
+    steps.push(r.guardrails
+      ? step(r.blocked === "output" ? "bad" : "good", "NeMo Guardrails · output", r.blocked === "output" ? "Blocked the answer." : "Answer allowed.", f("guardrails_out"))
+      : step("off", "NeMo Guardrails · output", "Switched off for this question.", ""));
+  }
+  const order = [["guardrails_in", "Guardrails in", 1], ["query_processing", "Query processing", 1], ["retrieve_rerank", "Retrieve + rerank", 0], ["llm", "LLM", 1], ["reflection", "Reflection", 1], ["guardrails_out", "Guardrails out", 1]].filter(([k]) => t[k] != null);
+  const max = Math.max(...order.map(([k]) => t[k]), 0.01);
+  $("#panel-pipeline").innerHTML = `
+    <h3>Steps</h3><ol class="steps">${steps.join("")}</ol>
+    <h3>Where the ${r.total_seconds.toFixed(1)} s went</h3>
+    <div class="bars">${order.map(([k, name, hosted]) => `<span>${name}</span><span class="bar ${hosted ? "hosted" : ""}" style="width:${(100 * t[k] / max).toFixed(1)}%"></span><span class="v">${t[k].toFixed(2)} s</span>`).join("")}</div>
+    <p class="caption">Amber bars are calls to the NVIDIA-hosted LLM; teal runs on your GPU.</p>`;
+}
+
+function select(r) {
+  state.current = r;
+  document.querySelectorAll(".msg.bot").forEach(m => m.classList.toggle("selected", m.dataset.r === String(state.results.indexOf(r))));
+  renderSources(r); renderPipeline(r);
+}
+
+/* ---------- asking ---------- */
+const STAGES = ["Guardrails", "Query processing", "Vector search", "Reranking", "LLM", "Reflection", "Guardrails"];
+async function submit(question) {
+  if (state.busy || !question.trim()) return;
+  state.busy = true; $("#send").disabled = true;
+  addMsg("user", `<div class="bubble">${esc(question)}</div>`);
+  const pending = addMsg("bot", `<div class="bubble working"><span class="label">Working · <span id="elapsed">0.0</span> s</span><div class="stages">${STAGES.map((s, i) => `<span class="stage" data-s="${i}">${s}</span>`).join("")}</div></div>`);
+  const t0 = performance.now();
+  const est = [0.8, 2.5, 3.2, 3.7, 6.5, 8.5, 9.2];
+  const tick = setInterval(() => {
+    const el = (performance.now() - t0) / 1000;
+    const e = $("#elapsed", pending); if (e) e.textContent = el.toFixed(1);
+    const cur = est.findIndex(x => el < x);
+    pending.querySelectorAll(".stage").forEach((s, i) => s.classList.toggle("on", i === (cur < 0 ? STAGES.length - 1 : cur)));
+  }, 100);
+  try {
+    const resp = await fetch("/api/ask", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, history: state.history, guardrails: $("#optGuard").checked, reflection: $("#optReflect").checked }) });
+    const r = await resp.json();
+    if (!resp.ok) throw new Error(r.detail || `HTTP ${resp.status}`);
+    state.results.push(r);
+    const idx = state.results.length - 1;
+    pending.dataset.r = idx;
+    pending.innerHTML = `<div class="bubble">${renderAnswer(r.answer, idx)}</div><div class="meta">${statusChips(r)}</div>`;
+    state.history.push({ role: "user", content: question }, { role: "assistant", content: r.answer });
+    select(r);
+    showTab(r.sources.length ? "sources" : "pipeline");
+  } catch (err) {
+    pending.innerHTML = `<div class="bubble error">Something went wrong: ${esc(err.message)}. Check that the Docker containers are running (docker compose ps), then try again.</div>`;
+  } finally {
+    clearInterval(tick); state.busy = false; $("#send").disabled = false; $("#q").focus();
+  }
+}
+
+$("#thread").addEventListener("click", e => {
+  const c = e.target.closest(".cite");
+  if (c) { const r = state.results[+c.dataset.r]; select(r); openPage(r, null, c.dataset.file, +c.dataset.page); return; }
+  const s = e.target.closest("[data-show]");
+  if (s) { select(state.results[+s.dataset.show]); showTab("sources"); return; }
+  const m = e.target.closest(".msg.bot");
+  if (m && m.dataset.r) select(state.results[+m.dataset.r]);
+  const ex = e.target.closest(".examples button");
+  if (ex) submit(ex.textContent.trim());
+});
+
+const q = $("#q");
+const grow = () => { q.style.height = "auto"; q.style.height = Math.min(q.scrollHeight, 180) + "px"; };
+q.addEventListener("input", grow);
+q.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#composer").requestSubmit(); } });
+$("#composer").addEventListener("submit", e => { e.preventDefault(); const v = q.value; q.value = ""; grow(); submit(v); });
+$("#newChat").addEventListener("click", () => location.reload());
+
+loadStatus();
+setInterval(loadStatus, 30000);
+q.focus();
+const linked = new URLSearchParams(location.search).get("q");  // e.g. /?q=hinge+brackets asks on load
+if (linked) submit(linked);
+</script>
+</body>
+</html>

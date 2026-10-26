@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Open-VLM PDF RAG</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Sans+3:wght@400;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --bg: #f6f8f8; --surface: #ffffff; --fg: #172123; --muted: #56666a; --rule: #d5dedf; --ink-2: #6b7b7f;
+  --self: #0f7c74; --self-bg: #e3f3f1; --hosted: #a6620a; --hosted-bg: #fbf0df;
+  --store: #2c5c9e; --store-bg: #e4ecf8; --code-bg: #eef2f2;
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 var(--font-body); }
+.sheet { width: 1600px; padding: 36px 44px 32px; display: flex; flex-direction: column; gap: 18px; }
+header { display: flex; justify-content: space-between; align-items: flex-end; gap: 24px; }
+h1 { font: 700 30px/1.15 var(--font-display); margin: 0; letter-spacing: -0.01em; }
+.sub { color: var(--muted); font-size: 16px; margin-top: 6px; }
+.meta { font: 500 12px/1.6 var(--font-mono); color: var(--muted); text-align: right; text-transform: uppercase; letter-spacing: 0.06em; }
+.frame { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px 10px; }
+svg { display: block; width: 100%; height: auto; color: var(--ink-2); }
+.b-self { fill: var(--self-bg); stroke: var(--self); stroke-width: 1.6; }
+.b-hosted { fill: var(--hosted-bg); stroke: var(--hosted); stroke-width: 1.6; stroke-dasharray: 6 3; }
+.b-code { fill: var(--code-bg); stroke: var(--ink-2); stroke-width: 1.3; }
+.b-store { fill: var(--store-bg); stroke: var(--store); stroke-width: 1.6; }
+.t1 { font: 600 14px var(--font-display); fill: var(--fg); }
+.t2 { font: 9.6px var(--font-mono); fill: var(--muted); letter-spacing: -0.1px; }
+.t3 { font: 500 11px var(--font-mono); fill: var(--self); }
+.t3.h { fill: var(--hosted); } .t3.c { fill: var(--ink-2); } .t3.s { fill: var(--store); }
+.lab { font: italic 12px var(--font-body); fill: var(--muted); }
+.band { font: 600 12px var(--font-mono); letter-spacing: 0.1em; fill: var(--muted); }
+.flow { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.flow.opt { stroke-dasharray: 5 4; }
+.sep { stroke: var(--rule); stroke-width: 1.6; stroke-dasharray: 7 6; }
+.dot { fill: currentColor; }
+.bottom { display: grid; grid-template-columns: 1.1fr 1fr 1fr; gap: 18px; }
+.card { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 18px; }
+.card h2 { font: 600 13px var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; }
+.legend { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; font-size: 14px; }
+.legend span { display: flex; align-items: center; gap: 9px; }
+.sw { width: 24px; height: 15px; border-radius: 3px; border: 1.6px solid; flex: none; }
+.sw.self { background: var(--self-bg); border-color: var(--self); }
+.sw.hosted { background: var(--hosted-bg); border-color: var(--hosted); border-style: dashed; }
+.sw.code { background: var(--code-bg); border-color: var(--ink-2); }
+.sw.store { background: var(--store-bg); border-color: var(--store); }
+.stats { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 14px; }
+.stats dt { font: 500 13px var(--font-mono); color: var(--muted); }
+.stats dd { margin: 0; font-variant-numeric: tabular-nums; }
+ul { margin: 0; padding-left: 18px; font-size: 14px; display: flex; flex-direction: column; gap: 3px; }
+</style>
+</head>
+<body>
+<div class="sheet">
+  <header>
+    <div>
+      <h1>Open-VLM RAG for the PDF library</h1>
+      <div class="sub">NeMo Retriever architecture, box for box, with the OCR box replaced by DeepSeek-OCR + GLM-4.6V · RTX 5000 Ada (32 GB)</div>
+    </div>
+    <div class="meta">Design · 26 Oct 2026<br>NIMs 26.08 · vLLM 0.31 · Milvus 2.6.24</div>
+  </header>
+
+  <div class="frame">
+  <svg viewBox="0 0 1240 900" role="img" aria-label="As-built architecture. Retrieval: user query, input guardrails, query processing, query embedding, Milvus GPU CAGRA search, reranking, Nemotron 3 Super answer LLM, reflection with up to two retries, output guardrails, response. Extraction: PDF pages as images go to page elements, which routes infographics to GLM-4.6V, charts through graphic elements to GLM-4.6V, and tables through table structure to DeepSeek-OCR, with a GLM-4.6V re-read when the table disagrees with the detected grid; pages also go to Nemotron Parse for text and metadata; VLM and Parse text are embedded and stored in Milvus.">
+    <defs>
+      <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+      </marker>
+    </defs>
+
+    <!-- ===== RETRIEVAL ===== -->
+    <rect class="b-hosted" x="475" y="23" width="190" height="54" rx="8"/>
+    <text class="t1" x="570" y="45" text-anchor="middle">LLM (optional)</text>
+    <text class="t2" x="570" y="63" text-anchor="middle">judge · same model, hosted</text>
+
+    <rect class="b-code" x="235" y="135" width="190" height="70" rx="8"/>
+    <text class="t1" x="330" y="160" text-anchor="middle">NeMo Guardrails (opt.)</text>
+    <text class="t2" x="330" y="177" text-anchor="middle">self-check output rail</text>
+    <text class="t3 c" x="330" y="194" text-anchor="middle">Python · hosted LLM</text>
+
+    <rect class="b-code" x="475" y="135" width="190" height="70" rx="8"/>
+    <text class="t1" x="570" y="160" text-anchor="middle">Reflection</text>
+    <text class="t2" x="570" y="177" text-anchor="middle">grounded? answers it?</text>
+    <text class="t3 c" x="570" y="194" text-anchor="middle">Python · hosted LLM</text>
+
+    <rect class="b-hosted" x="725" y="135" width="190" height="70" rx="8"/>
+    <text class="t1" x="820" y="160" text-anchor="middle">LLM</text>
+    <text class="t2" x="820" y="177" text-anchor="middle">nemotron-3-ultra-550b-a55b</text>
+    <text class="t3 h" x="820" y="194" text-anchor="middle">hosted · build.nvidia.com</text>
+
+    <rect class="b-self" x="985" y="135" width="190" height="70" rx="8"/>
+    <text class="t1" x="1080" y="160" text-anchor="middle">NeMo Retriever Reranking</text>
+    <text class="t2" x="1080" y="177" text-anchor="middle">llama-nemotron-rerank-vl-1b-v2</text>
+    <text class="t3" x="1080" y="194" text-anchor="middle">:8105 · 5.7 GB</text>
+
+    <circle cx="100" cy="320" r="30" class="b-store"/>
+    <text class="t1" x="100" y="325" text-anchor="middle">User</text>
+
+    <rect class="b-code" x="235" y="285" width="190" height="70" rx="8"/>
+    <text class="t1" x="330" y="310" text-anchor="middle">NeMo Guardrails (opt.)</text>
+    <text class="t2" x="330" y="327" text-anchor="middle">self-check input rail</text>
+    <text class="t3 c" x="330" y="344" text-anchor="middle">Python · hosted LLM</text>
+
+    <rect class="b-code" x="475" y="285" width="190" height="70" rx="8"/>
+    <text class="t1" x="570" y="310" text-anchor="middle">Query Processing</text>
+    <text class="t2" x="570" y="327" text-anchor="middle">rewrite + 3 paraphrases</text>
+    <text class="t3 c" x="570" y="344" text-anchor="middle">Python · hosted LLM</text>
+
+    <rect class="b-self" x="725" y="285" width="190" height="70" rx="8"/>
+    <text class="t1" x="820" y="310" text-anchor="middle">NeMo Retriever Embedding</text>
+    <text class="t2" x="820" y="327" text-anchor="middle">input_type = query</text>
+    <text class="t3" x="820" y="344" text-anchor="middle">same NIM as ingest · :8104</text>
+
+    <rect class="b-store" x="985" y="285" width="190" height="70" rx="8"/>
+    <text class="t1" x="1080" y="310" text-anchor="middle">Vector Database (cuVS)</text>
+    <text class="t2" x="1080" y="327" text-anchor="middle">Milvus GPU · GPU_CAGRA · IP</text>
+    <text class="t3 s" x="1080" y="344" text-anchor="middle">:19531 · ~3.5 GB · dim 2048</text>
+
+    <path class="flow" d="M130,320 H233" marker-end="url(#ah)"/>
+    <text class="lab" x="181" y="312" text-anchor="middle">query</text>
+    <path class="flow" d="M425,320 H473" marker-end="url(#ah)"/>
+    <path class="flow" d="M665,320 H723" marker-end="url(#ah)"/>
+    <text class="lab" x="694" y="312" text-anchor="middle">queries</text>
+    <path class="flow" d="M915,320 H983" marker-end="url(#ah)"/>
+    <text class="lab" x="949" y="312" text-anchor="middle">vectors</text>
+    <path class="flow" d="M1080,285 V207" marker-end="url(#ah)"/>
+    <text class="lab" x="1072" y="250" text-anchor="end">top-50 chunks</text>
+    <path class="flow" d="M985,170 H917" marker-end="url(#ah)"/>
+    <text class="lab" x="951" y="162" text-anchor="middle">top-5</text>
+    <path class="flow" d="M725,170 H667" marker-end="url(#ah)"/>
+    <text class="lab" x="696" y="162" text-anchor="middle">draft</text>
+    <path class="flow" d="M475,170 H427" marker-end="url(#ah)"/>
+    <text class="lab" x="451" y="162" text-anchor="middle">pass</text>
+    <path class="flow" d="M235,170 H100 V288" marker-end="url(#ah)"/>
+    <text class="lab" x="168" y="162" text-anchor="middle">cited answer</text>
+    <path class="flow opt" d="M570,77 V133" marker-end="url(#ah)"/>
+    <text class="lab" x="578" y="108">scores the draft</text>
+    <path class="flow opt" d="M570,205 V283" marker-end="url(#ah)"/>
+    <text class="lab" x="578" y="248">fail → retry with feedback (max 2)</text>
+
+    <line class="sep" x1="0" y1="400" x2="1240" y2="400"/>
+    <text class="band" x="130" y="390">RETRIEVAL PIPELINE</text>
+    <text class="band" x="130" y="424">EXTRACTION PIPELINE</text>
+
+    <!-- ===== EXTRACTION ===== -->
+    <rect class="b-self" x="265" y="505" width="190" height="70" rx="8"/>
+    <text class="t1" x="360" y="530" text-anchor="middle">Page Elements</text>
+    <text class="t2" x="360" y="547" text-anchor="middle">nemotron-page-elements-v3</text>
+    <text class="t3" x="360" y="564" text-anchor="middle">:8100 · 1.0 GB · ~36 pages/s</text>
+
+    <rect class="b-hosted" x="535" y="505" width="190" height="70" rx="8"/>
+    <text class="t1" x="630" y="530" text-anchor="middle">Graphic Elements</text>
+    <text class="t2" x="630" y="547" text-anchor="middle">nemotron-graphic-elements-v1</text>
+    <text class="t3 h" x="630" y="564" text-anchor="middle">hosted · build.nvidia.com</text>
+
+    <rect class="b-self" x="535" y="645" width="190" height="70" rx="8"/>
+    <text class="t1" x="630" y="670" text-anchor="middle">Table Structure</text>
+    <text class="t2" x="630" y="687" text-anchor="middle">nemotron-table-structure-v1</text>
+    <text class="t3" x="630" y="704" text-anchor="middle">:8101 · 1.0 GB</text>
+
+    <!-- OCR box, now two open VLMs -->
+    <rect x="790" y="470" width="220" height="260" rx="12" fill="none" stroke="var(--rule)" stroke-width="1.4"/>
+    <text class="band" x="802" y="488">OCR</text>
+    <rect class="b-hosted" x="805" y="505" width="190" height="70" rx="8"/>
+    <text class="t1" x="900" y="530" text-anchor="middle">GLM-4.6V</text>
+    <text class="t2" x="900" y="547" text-anchor="middle">charts · figures · table re-read</text>
+    <text class="t3 h" x="900" y="564" text-anchor="middle">hosted · OpenRouter</text>
+    <rect class="b-self" x="805" y="645" width="190" height="70" rx="8"/>
+    <text class="t1" x="900" y="670" text-anchor="middle">DeepSeek-OCR</text>
+    <text class="t2" x="900" y="687" text-anchor="middle">deepseek-ai/DeepSeek-OCR (vLLM)</text>
+    <text class="t3" x="900" y="704" text-anchor="middle">:8102 · ~9 GB</text>
+
+    <rect class="b-store" x="15" y="785" width="170" height="70" rx="8"/>
+    <text class="t1" x="100" y="810" text-anchor="middle">Enterprise PDFs</text>
+    <text class="t2" x="100" y="827" text-anchor="middle">data/pdfs/</text>
+    <text class="t3 s" x="100" y="844" text-anchor="middle">O&amp;M Manual · 9,832 pp</text>
+
+    <rect class="b-self" x="445" y="785" width="190" height="70" rx="8"/>
+    <text class="t1" x="540" y="810" text-anchor="middle">NeMo Retriever Parse</text>
+    <text class="t2" x="540" y="827" text-anchor="middle">nemotron-parse-v1.2 (vLLM)</text>
+    <text class="t3" x="540" y="844" text-anchor="middle">:8103 · 4.8 GB · ~1 page/s</text>
+
+    <rect class="b-self" x="985" y="785" width="190" height="70" rx="8"/>
+    <text class="t1" x="1080" y="810" text-anchor="middle">NeMo Retriever Embedding</text>
+    <text class="t2" x="1080" y="827" text-anchor="middle">llama-nemotron-embed-vl-1b-v2</text>
+    <text class="t3" x="1080" y="844" text-anchor="middle">:8104 · 4.4 GB · passage</text>
+
+    <path class="flow" d="M100,350 V783" marker-end="url(#ah)"/>
+    <text class="lab" x="108" y="600">PDFs</text>
+    <path class="flow" d="M185,820 H443" marker-end="url(#ah)"/>
+    <circle class="dot" cx="320" cy="820" r="3.5"/>
+    <path class="flow" d="M320,820 V577" marker-end="url(#ah)"/>
+    <text class="lab" x="312" y="700" text-anchor="end">pages as images</text>
+    <text class="lab" x="312" y="716" text-anchor="end">150 DPI JPEG</text>
+    <path class="flow" d="M360,505 V455 H900 V503" marker-end="url(#ah)"/>
+    <text class="lab" x="630" y="447" text-anchor="middle">infographics</text>
+    <path class="flow" d="M455,540 H533" marker-end="url(#ah)"/>
+    <text class="lab" x="494" y="532" text-anchor="middle">charts</text>
+    <path class="flow" d="M410,575 V680 H533" marker-end="url(#ah)"/>
+    <text class="lab" x="472" y="672" text-anchor="middle">tables</text>
+    <path class="flow" d="M725,540 H803" marker-end="url(#ah)"/>
+    <text class="lab" x="764" y="532" text-anchor="middle">+ part hints</text>
+    <path class="flow" d="M725,680 H803" marker-end="url(#ah)"/>
+    <text class="lab" x="764" y="672" text-anchor="middle">+ grid</text>
+    <path class="flow opt" d="M900,645 V577" marker-end="url(#ah)"/>
+    <text class="lab" x="908" y="608">grid mismatch</text>
+    <text class="lab" x="908" y="623">→ re-read</text>
+    <path class="flow" d="M995,540 H1030 V783" marker-end="url(#ah)"/>
+    <path class="flow" d="M995,680 H1030"/>
+    <circle class="dot" cx="1030" cy="680" r="3.5"/>
+    <text class="lab" x="1022" y="760" text-anchor="end">text</text>
+    <path class="flow" d="M635,835 H983" marker-end="url(#ah)"/>
+    <text class="lab" x="810" y="827" text-anchor="middle">text + metadata</text>
+    <path class="flow" d="M1080,785 V357" marker-end="url(#ah)"/>
+    <text class="lab" x="1088" y="600">vectors + metadata</text>
+    <text class="lab" x="1088" y="616">(file, page, type, bbox,</text>
+    <text class="lab" x="1088" y="632">extractor)</text>
+  </svg>
+  </div>
+
+  <div class="bottom">
+    <div class="card">
+      <h2>Legend</h2>
+      <div class="legend">
+        <span><i class="sw self"></i>Self-hosted on the GPU</span>
+        <span><i class="sw hosted"></i>Hosted API (NVIDIA, OpenRouter)</span>
+        <span><i class="sw code"></i>Python in this project</span>
+        <span><i class="sw store"></i>Data / storage</span>
+      </div>
+      <p style="margin:10px 0 0;font-size:14px;color:var(--muted)">Dashed arrows are optional paths, as in NVIDIA's diagram. GPU figures for the NIMs were measured in the NeMo build; DeepSeek-OCR's is its vLLM budget.</p>
+    </div>
+    <div class="card">
+      <h2>Expected (not yet measured)</h2>
+      <dl class="stats" style="margin:0">
+        <dt>GPU budget</dt><dd>~27 of 32 GB: 5 NIMs + DeepSeek-OCR + Milvus</dd>
+        <dt>Routing</dt><dd>tables → DeepSeek · charts, figures → GLM</dd>
+        <dt>Fallback</dt><dd>either model covers for the other</dd>
+        <dt>Resume</dt><dd>checkpoint every 64 pages</dd>
+      </dl>
+    </div>
+    <div class="card">
+      <h2>Changes from the reference</h2>
+      <ul>
+        <li>OCR: DeepSeek-OCR + GLM-4.6V instead of nemotron-ocr-v2</li>
+        <li>Tables: VLM writes the table, Table Structure's grid checks it</li>
+        <li>Graphic Elements: chart parts become GLM's checklist</li>
+        <li>Vector DB: Milvus GPU_CAGRA for cuVS; separate stack (81xx)</li>
+        <li>Every chunk prefixed with its page's title lines</li>
+      </ul>
+    </div>
+  </div>
+</div>
+</body>
+</html>
